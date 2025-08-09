@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.mp4
+*.mov
+*.mkv
+*.avi
+annotated.mp4
+tracks.csv
+.DS_Store
