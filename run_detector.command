@@ -23,3 +23,4 @@ exec python satellite_detector.py \
   --show \
   --save-csv tracks.csv \
   --live-count
+
