@@ -62,3 +62,4 @@ python satellite_detector.py --video starlink_test.mp4 --show --save-csv tracks.
 - **annotated.mp4** — detections and track trails (green = confirmed, grey = unconfirmed)
 - **tracks.csv** — detection positions over time
 - **HUD** — FPS, active tracks, frame count, confirmed satellites
+
