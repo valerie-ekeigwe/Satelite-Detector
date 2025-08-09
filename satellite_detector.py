@@ -4,12 +4,8 @@ from collections import deque
 from dataclasses import dataclass
 from math import hypot
 from typing import List, Tuple
-
 import cv2
 import numpy as np
-
-# ---------------- Core image processing ---------------- #
-
 def to_gray(frame: np.ndarray, sigma: float) -> np.ndarray:
     if frame.ndim == 3:
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -19,7 +15,6 @@ def to_gray(frame: np.ndarray, sigma: float) -> np.ndarray:
         f = cv2.blur(f, (k, 1))
         f = cv2.blur(f, (1, k))
     return np.clip(f, 0, 255).astype(np.uint8)
-
 class RunningPercentile:
     def __init__(self, window: int = 31, q: float = 50):
         self.window = int(window)
@@ -32,7 +27,6 @@ class RunningPercentile:
     def background(self) -> np.ndarray:
         arr = np.stack(self.buf, axis=0)
         return np.percentile(arr, self.q, axis=0).astype(np.uint8)
-
 def robust_mask(diff: np.ndarray, k: float, bright_clip: int) -> np.ndarray:
     valid = diff < bright_clip
     vals = diff[valid]
@@ -43,7 +37,6 @@ def robust_mask(diff: np.ndarray, k: float, bright_clip: int) -> np.ndarray:
     mad = np.median(np.abs(vals - med)) + 1e-6
     z = (diff - med) / (1.4826 * mad)
     return (z > k).astype(np.uint8)
-
 def morph_clean(bin_img: np.ndarray, dilate_iters: int, erode_iters: int) -> np.ndarray:
     k = np.ones((3, 3), np.uint8)
     out = bin_img
@@ -52,7 +45,6 @@ def morph_clean(bin_img: np.ndarray, dilate_iters: int, erode_iters: int) -> np.
     if dilate_iters > 0:
         out = cv2.dilate(out, k, iterations=dilate_iters)
     return out
-
 def find_blobs(binary: np.ndarray, min_area: int, max_area: int):
     num, _, stats, centroids = cv2.connectedComponentsWithStats(binary, connectivity=8)
     out = []
@@ -62,15 +54,11 @@ def find_blobs(binary: np.ndarray, min_area: int, max_area: int):
             cx, cy = centroids[i]
             out.append((float(cx), float(cy), int(area), (x, y, w, h)))
     return out
-
-# ---------------- Tracking ---------------- #
-
 @dataclass
 class Track:
     id: int
     points: List[Tuple[int, float, float]]
     misses: int = 0
-
     def length(self) -> int:
         return len(self.points)
     def last(self):
@@ -80,19 +68,17 @@ class Track:
             _, x, y = self.last()
             return x, y
         (_, x2, y2), (_, x1, y1) = self.points[-1], self.points[-2]
-        # simple velocity projection: Δx = x2 - x1, Δy = y2 - y1
+        
         return x2 + (x2 - x1), y2 + (y2 - y1)
     def add(self, fr: int, x: float, y: float):
         self.points.append((fr, x, y))
         self.misses = 0
-
 class Tracker:
     def __init__(self, link_dist: float, max_miss: int):
         self._next_id = 1
         self.link_dist = float(link_dist)
         self.max_miss = int(max_miss)
         self.tracks: List[Track] = []
-
     def step(self, fr: int, detections):
         used = set()
         for t in self.tracks:
@@ -116,9 +102,6 @@ class Tracker:
                 self.tracks.append(Track(id=self._next_id, points=[(fr, cx, cy)]))
                 self._next_id += 1
         self.tracks = [t for t in self.tracks if t.misses <= self.max_miss]
-
-# ---------------- Classification ---------------- #
-
 def satellite_like(track: Track, fps: float, min_len: int) -> bool:
     if track.length() < min_len:
         return False
@@ -129,47 +112,38 @@ def satellite_like(track: Track, fps: float, min_len: int) -> bool:
         v.append(hypot(x2 - x1, y2 - y1))
     if len(v) < 3:
         return False
-    v = np.asarray(v, dtype=float) * fps  # px/s
+    v = np.asarray(v, dtype=float) * fps  
     mean_v = float(np.mean(v))
     if mean_v < 5 or mean_v > 500:
         return False
-    # Coefficient of variation threshold: std/mean
+    
     if (np.std(v) / (mean_v + 1e-6)) > 0.4:
         return False
     return True
-
-# ---------------- Main ---------------- #
-
 def run(args):
     src = 0 if str(args.video).strip() == "0" else args.video
     cap = cv2.VideoCapture(src)
     if not cap.isOpened():
         raise SystemExit("Cannot open video/camera.")
-
     fps = (cap.get(cv2.CAP_PROP_FPS) or 30.0) * args.fps_rescale
     W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 1280)
     H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 720)
-
     writer = cv2.VideoWriter(
         args.out,
         cv2.VideoWriter_fourcc(*"mp4v"),
         max(1.0, fps),
         (W, H),
     )
-
     bg = RunningPercentile(window=args.bg_window, q=50)
     tracker = Tracker(link_dist=args.link_dist, max_miss=args.max_miss)
     confirmed_ids = set()
-
     frame_idx = 0
     while True:
         ok, frame = cap.read()
         if not ok:
             break
-
         gray = to_gray(frame, args.smoothing_sigma)
         bg.update(gray)
-
         if not bg.ready():
             vis = frame
         else:
@@ -178,14 +152,12 @@ def run(args):
             mask = morph_clean(mask, dilate_iters=args.dilate_iters, erode_iters=args.erode_iters)
             blobs = find_blobs(mask, min_area=args.min_area, max_area=args.max_area)
             tracker.step(frame_idx, blobs)
-
-            # confirm satellites live
+            
             for t in tracker.tracks:
                 if t.id not in confirmed_ids and satellite_like(t, fps=fps, min_len=args.min_track):
                     confirmed_ids.add(t.id)
                     if args.live_count:
                         print(f"[+] New satellite ID {t.id} (total: {len(confirmed_ids)})")
-
             vis = frame.copy()
             for (cx, cy, _, _) in blobs:
                 cv2.circle(vis, (int(cx), int(cy)), 3, (0, 255, 255), 1)
@@ -199,23 +171,18 @@ def run(args):
                 _, tx, ty = t.last()
                 cv2.putText(vis, f"ID {t.id}", (int(tx) + 5, int(ty) - 5),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
-
         hud = f"fps:{fps:.1f} tracks:{len(tracker.tracks)} frame:{frame_idx} sats:{len(confirmed_ids)}"
         cv2.putText(vis, hud, (8, H - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
-
         writer.write(vis)
         if args.show:
             cv2.imshow("satellite-detector", vis)
             if cv2.waitKey(1) & 0xFF == 27:
                 break
-
         frame_idx += 1
-
     cap.release()
     writer.release()
     if args.show:
         cv2.destroyAllWindows()
-
     if args.save_csv:
         with open(args.save_csv, "w", newline="") as f:
             w = csv.writer(f)
@@ -223,10 +190,8 @@ def run(args):
             for t in tracker.tracks:
                 for fr, x, y in t.points:
                     w.writerow([t.id, fr, x, y])
-
     if args.live_count:
         print(f"[summary] confirmed satellites: {len(confirmed_ids)}")
-
 def parse_args():
     p = argparse.ArgumentParser(description="Detect satellites in night-sky video.")
     p.add_argument("--video", default="night_sky.mp4")
@@ -248,6 +213,5 @@ def parse_args():
     p.add_argument("--draw-trail", type=int, default=30)
     p.add_argument("--fps-rescale", type=float, default=1.0)
     return p.parse_args()
-
 if __name__ == "__main__":
     run(parse_args())
